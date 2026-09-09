@@ -6,7 +6,7 @@ This repository accompanies the manuscript:
 
 > **Development and Scoring of a Diet Quality Screener for Hispanic/Latino Adults Using National Health and Nutrition Examination Survey Data: The ¿SABE Lo Que Come? Tool**
 > Pichardo MS, Shandar V, Quinn R, McReynolds V, Townsend Creasy K, Wu GD, Compher C.
-> University of Pennsylvania. Target journal: *AJCN*.
+> University of Pennsylvania.
 
 ## What this code does
 
@@ -67,21 +67,14 @@ Each input CSV (`NHANES_1718_export.csv`, `NHANES_1516_export.csv`) is expected 
 | Supplemental Table 4 (regression weights, AHEI-2010) | `SUPPLEMENTAL TABLE 4` |
 | Supplemental Table 5 (SABE items vs AHEI-2010 components) | `SUPPLEMENTAL TABLE 5` |
 
-## Key modeling decisions
 
-- **Red/orange vegetables** are scored as a *combined* variable (`V_REDOR_OTHER + V_REDOR_TOMATO`), consistent with the Methods description of "combined screener variables." This item is included as one of the 9 forward-scored items in the simple algorithm (range 0–60), and is labeled `screen_v_redor_combined` throughout the SAS code and the two heatmap R scripts.
-- **The regression-weighted score (`score_sabe_reg`)** is fit on all 24 screener items (18 continuous + 6 yes/no) — this is the same model reported in Supplemental Table 3 (HEI-2020). If you re-run the regression and get different coefficients (e.g., after a data refresh), update the hardcoded weights inside the `%prep_sabe_cycle` macro to match.
-
-## Known text/code discrepancy to resolve
-
-The manuscript's Methods section currently states the regression-weighted score is derived from "*all 18 continuous screener items simultaneously*." The actual model (and the one that reproduces the correlations in Table 2) uses all **24** items, including the 6 yes/no behavioral items. This should be corrected in the manuscript text.
 
 ## Citation
 
 If you use this code, please cite:
 
-> Pichardo MS, McReynolds V, Wu GD, Townsend Creasy K, Quinn R, McClain AC, et al. Validation of a Novel Dietary Screener for Clinical Practice: "¿SABE Lo QUE COME?" A Screener Assessment for Better Eating (SABE) in Hispanic/Latino Adults. Under Review. 2026.
+> Pichardo MS, Shandar V, Quinn R, McReynolds V, Townsend Creasy K, Wu GD, Compher C. Development and Scoring of a Diet Quality Screener for Hispanic/Latino Adults Using National Health and Nutrition Examination Survey Data: The ¿SABE Lo Que Come? Tool. Under Review. 2026.
 
 ## Contact
 
-Margaret S. Pichardo, MD, PhD, MPH — Department of Surgery, University of Pennsylvania — margaret.pichardo@pennmedicine.upenn.edu
+Vasuprada Shandar, BS — University of Pennsylvania, Perelman School of Medicine — vasuprada.shandar@pennmedicine.upenn.edu
