@@ -1,0 +1,683 @@
+/*****************************************************************/
+/* SABE SCREENER SCORING - COMPLETE ANALYSIS PIPELINE            */
+/* Development and Scoring of a Diet Quality Screener for        */
+/* Hispanic/Latino Adults Using NHANES Data                      */
+/*                                                                 */
+/* Pichardo, Shandar, Quinn, McReynolds, Townsend Creasy, Wu,    */
+/* Compher. Penn Medicine / Penn Nursing.                        */
+/*                                                                 */
+/* This script reproduces every table and figure in:             */
+/*   - SABE_Screener_Scoring_Manuscript                          */
+/*   - SABE_Screener_Scoring_Tables_and_Figures                  */
+/*                                                                 */
+/*****************************************************************/
+
+
+/*****************************************************************/
+/* SECTION 0: SETUP AND IMPORT                                    */
+/*****************************************************************/
+
+libname rawdata "/workspaces/myfolder/sas-viya-workbench-examples/sabe_project/raw_data";
+libname outdata "/workspaces/myfolder/sas-viya-workbench-examples/sabe_project/output";
+
+%let outpath = /workspaces/myfolder/sas-viya-workbench-examples/sabe_project/output;
+
+proc import
+    datafile="/workspaces/myfolder/sas-viya-workbench-examples/sabe_project/raw_data/NHANES_1718_export.csv"
+    out=outdata.nhanes_1718 dbms=csv replace;
+    getnames=yes;
+run;
+
+proc import
+    datafile="/workspaces/myfolder/sas-viya-workbench-examples/sabe_project/raw_data/NHANES_1516_export.csv"
+    out=outdata.nhanes_1516 dbms=csv replace;
+    getnames=yes;
+run;
+
+
+/*****************************************************************/
+/* SECTION 1: SCREENER DISCRETIZATION MACRO                       */
+/* Converts continuous FPED intake (servings/day) to a 0-5 scale  */
+/*   0 servings         -> 0                                      */
+/*   0  to <1 serving   -> 1                                      */
+/*   1  to <2 servings  -> 2                                      */
+/*   2  to <3 servings  -> 3                                      */
+/*   3  to <4 servings  -> 4                                      */
+/*   >=4 servings       -> 5                                      */
+/*****************************************************************/
+
+%macro create_screen_var(var);
+    if &var. ne . then do;
+        if &var.=0 then screen_&var.=0;
+        if 0<&var.<1 then screen_&var.=1;
+        if 1<=&var.<2 then screen_&var.=2;
+        if 2<=&var.<3 then screen_&var.=3;
+        if 3<=&var.<4 then screen_&var.=4;
+        if 4<=&var. then screen_&var.=5;
+    end;
+%mend create_screen_var;
+
+
+/*****************************************************************/
+/* SECTION 2: MASTER PREP MACRO (applied identically to both      */
+/* NHANES cycles: 2017-18 development sample, 2015-16 validation  */
+/* sample)                                                         */
+/*****************************************************************/
+
+%macro prep_sabe_cycle(in=, out=);
+
+data &out.;
+set &in.;
+
+    /* --- Restrict to Hispanic/Latino adults --- */
+    if RIDAGEYR < 18 then delete;
+    if RIDRETH3 not in (1,2) then delete;
+
+    /* --- Unit conversions: ounce-equivalents -> 3-oz servings --- */
+    pf_meat_3      = pf_meat/3;
+    pf_curedmeat_3 = pf_curedmeat/3;
+    pf_poult_3     = pf_poult/3;
+
+    /* --- Combined FPED variables --- */
+    seafood          = PF_SEAFD_HI + PF_SEAFD_LOW;
+    seafood_3        = seafood/3;
+    plant_prot       = PF_SOY + PF_LEGUMES;
+    desserts         = ww_dessert_n + ww_bakery_n;
+    v_redor_combined = V_REDOR_TOMATO + V_REDOR_OTHER;   /* red/orange veg + tomatoes, per Methods */
+    coffee_tea       = fcat_7302 + fcat_7304;             /* not currently scored; retained for completeness */
+
+    /* --- Discretize all continuous screener items to 0-5 scale --- */
+    %create_screen_var(f_juice);
+    %create_screen_var(f_other);
+    %create_screen_var(v_drkgr);
+    %create_screen_var(v_redor_other);
+    %create_screen_var(v_redor_combined);
+    %create_screen_var(g_whole);
+    %create_screen_var(g_refined);
+    %create_screen_var(d_milk);
+    %create_screen_var(d_yogurt);
+    %create_screen_var(d_cheese);
+    %create_screen_var(pf_eggs);
+    %create_screen_var(pf_poult_3);
+    %create_screen_var(PF_NUTSDS);
+    %create_screen_var(pf_meat_3);
+    %create_screen_var(pf_curedmeat_3);
+    %create_screen_var(DBD900_daily);
+    %create_screen_var(ww_sweetbev_n);
+    %create_screen_var(ww_Savory_n);
+    %create_screen_var(seafood_3);
+    %create_screen_var(plant_prot);
+    %create_screen_var(desserts);
+    %create_screen_var(coffee_tea);
+
+    /* --- Yes/No behavioral items (from FPED food category flags) --- */
+    if fcat_8802=0 & fcat_8008=0 then yn_screen_sugar_honey=0;
+    if fcat_8802>0 or fcat_8008>0 then yn_screen_sugar_honey=1;
+    if fcat_8804 ne . then yn_screen_artif_sweet = (fcat_8804>0);
+    if fcat_8008 ne . then yn_screen_cream       = (fcat_8008>0);
+    if fcat_1002=0 & fcat_1820=0 & fcat_1822=0 & fcat_1604=0 then yn_screen_full_fat=0;
+    if (fcat_1002>0 or fcat_1820>0 or fcat_1822>0 or fcat_1604>0) then yn_screen_full_fat=1;
+    if fcat_8002 ne . then yn_screen_butter_gravy = (fcat_8002>0);
+    if fcat_8012 ne . then yn_screen_olive_veg_oil = (fcat_8012>0);
+
+    /* --- Exclude invalid/missing dietary recalls --- */
+    if HEI2015_TOTAL_SCORE = 0 then delete;   /* HEI-2020 total score, as pre-calculated in the analytic file */
+    if DR1TKCAL = . then delete;
+
+    /* ============================================================ */
+    /* SABE SIMPLE SCORE (Table 2 / Supplemental Table 2)            */
+    /* 9 forward-scored items (0-5 pts each) + 3 reverse-scored      */
+    /* items (15 - sum, yielding 0-5 pts each). Range: 0-60.         */
+    /* ============================================================ */
+    score_sabe =
+        sum(screen_f_juice, screen_f_other, screen_v_drkgr,
+            screen_v_redor_combined, screen_g_whole, screen_d_milk,
+            screen_PF_NUTSDS, screen_seafood_3, screen_plant_prot)
+        + (15 - sum(screen_g_refined, screen_d_cheese,
+                    screen_ww_sweetbev_n));
+
+    /* ============================================================ */
+    /* SABE REGRESSION-WEIGHTED SCORE                                 */
+    /* Coefficients from PROC REG of HEI-2020 total score on all      */
+    /* 24 screener items (18 continuous + 6 yes/no; 2017-18           */
+    /* development sample), using the COMBINED red/orange veg +       */
+    /* tomato variable. This is the same model reported in            */
+    /* Supplemental Table 3 below. Confirmed: correlations of this    */
+    /* score with HEI-2020/AHEI-2010 in both cycles match Table 2.    */
+    /* ============================================================ */
+    score_sabe_reg =
+        53.76751
+        + (screen_f_juice          *  2.52694)
+        + (screen_f_other          *  3.48910)
+        + (screen_v_drkgr          *  2.62739)
+        + (screen_v_redor_combined *  0.99750)
+        + (screen_g_whole          *  2.75627)
+        + (screen_g_refined        * -2.67174)
+        + (screen_d_milk           *  1.26504)
+        + (screen_d_yogurt         *  3.72683)
+        + (screen_d_cheese         * -2.14767)
+        + (screen_pf_eggs          *  0.49836)
+        + (screen_pf_poult_3       *  0.38900)
+        + (screen_PF_NUTSDS        *  2.14975)
+        + (screen_pf_meat_3        * -1.31956)
+        + (screen_pf_curedmeat_3   * -1.61512)
+        + (screen_seafood_3        *  1.23897)
+        + (screen_plant_prot       *  2.80066)
+        + (screen_ww_sweetbev_n    * -0.82875)
+        + (screen_desserts         * -1.43634)
+        + (yn_screen_olive_veg_oil *  2.60273)
+        + (yn_screen_full_fat      * -2.43796)
+        + (yn_screen_butter_gravy  * -5.05368)
+        + (yn_screen_sugar_honey   *  0.40486)
+        + (yn_screen_artif_sweet   *  0.09025)
+        + (yn_screen_cream         * -0.51406);
+
+    /* ============================================================ */
+    /* AHEI-2010 COMPONENTS (Chiuve et al. 2012)                      */
+    /* All components scored 0-10 except sodium (decile-ranked below) */
+    /* ============================================================ */
+    ahei_veg_intake = V_TOTAL - V_STARCHY_TOTAL;
+    ahei_veg        = min(10, max(0, ((ahei_veg_intake/0.5)/5) * 10));
+
+    ahei_fruit = min(10, max(0, ((F_OTHER/0.5)/4) * 10));
+
+    ahei_wg_grams = G_WHOLE * 16;
+    if RIAGENDR = 2 then ahei_wholegrain = min(10, max(0, (ahei_wg_grams/75) * 10));
+    else                 ahei_wholegrain = min(10, max(0, (ahei_wg_grams/90) * 10));
+
+    ahei_ssb_intake = F_JUICE + ww_sweetbev_n;
+    ahei_ssb        = min(10, max(0, (1 - ahei_ssb_intake) * 10));
+
+    ahei_nuts_intake = PF_NUTSDS + PF_LEGUMES;
+    ahei_nuts        = min(10, max(0, ahei_nuts_intake * 10));
+
+    ahei_meat_serv = (PF_MEAT/4) + (PF_CUREDMEAT/1.5);
+    ahei_meat      = min(10, max(0, ((1.5 - ahei_meat_serv)/1.5) * 10));
+
+    if DR1TP205 ne . and DR1TP226 ne . then do;
+        ahei_omega3_mg = (DR1TP205 + DR1TP226) * 1000;
+        ahei_omega3    = min(10, max(0, (ahei_omega3_mg/250) * 10));
+    end;
+    else ahei_omega3 = .;
+
+    if DR1TPFAT ne . and DR1TKCAL > 0 then do;
+        ahei_pufa_g   = DR1TPFAT - DR1TP205 - DR1TP226;
+        ahei_pufa_pct = (ahei_pufa_g * 9 / DR1TKCAL) * 100;
+        ahei_pufa     = min(10, max(0, ((ahei_pufa_pct - 2)/(10-2)) * 10));
+    end;
+    else ahei_pufa = .;
+
+    ahei_sodium_raw = DR1TSODI;   /* ranked into deciles after this data step */
+
+    if A_DRINKS = . then ahei_alcohol = .;
+    else if A_DRINKS = 0 then ahei_alcohol = 2.5;
+    else if RIAGENDR = 2 then do;   /* women */
+        if 0.5 <= A_DRINKS <= 1.5 then ahei_alcohol = 10;
+        else if A_DRINKS < 0.5    then ahei_alcohol = max(0, (A_DRINKS/0.5) * 10);
+        else                           ahei_alcohol = max(0, ((2.5 - A_DRINKS)/(2.5-1.5)) * 10);
+    end;
+    else do;   /* men */
+        if 0.5 <= A_DRINKS <= 2.0 then ahei_alcohol = 10;
+        else if A_DRINKS < 0.5    then ahei_alcohol = max(0, (A_DRINKS/0.5) * 10);
+        else                           ahei_alcohol = max(0, ((3.5 - A_DRINKS)/(3.5-2.0)) * 10);
+    end;
+
+run;
+
+/* --- AHEI sodium: decile-ranked, reverse-scored (higher sodium = lower score) --- */
+proc rank data=&out. out=&out. groups=10;
+    var ahei_sodium_raw;
+    ranks sodium_decile;
+run;
+
+data &out.;
+set &out.;
+    ahei_sodium = (9 - sodium_decile) / 9 * 10;
+
+    if DR1TP205=. or DR1TP226=. or DR1TPFAT=. or DR1TSODI=. or A_DRINKS=.
+        then AHEI_TOTAL = .;
+        else AHEI_TOTAL = sum(ahei_veg, ahei_fruit, ahei_wholegrain, ahei_ssb,
+                               ahei_nuts, ahei_meat, ahei_omega3, ahei_pufa,
+                               ahei_sodium, ahei_alcohol);
+run;
+
+%mend prep_sabe_cycle;
+
+%prep_sabe_cycle(in=outdata.nhanes_1718, out=outdata.sabe_1718);
+%prep_sabe_cycle(in=outdata.nhanes_1516, out=outdata.sabe_1516);
+
+/* --- Sanity check both cycles before moving to deliverables --- */
+title "VERIFY: 2017-18 development sample";
+proc means data=outdata.sabe_1718 n mean median min max;
+    var score_sabe score_sabe_reg HEI2015_TOTAL_SCORE AHEI_TOTAL;
+run;
+
+title "VERIFY: 2015-16 validation sample";
+proc means data=outdata.sabe_1516 n mean median min max;
+    var score_sabe score_sabe_reg HEI2015_TOTAL_SCORE AHEI_TOTAL;
+run;
+title;
+
+
+/*****************************************************************/
+/* FIGURE 1: CONSORT-STYLE FLOW DIAGRAM COUNTS                    */
+/* Run for both cycles to populate the exclusion flow diagram.    */
+/*****************************************************************/
+
+%macro consort_counts(in=, label=);
+
+    title "FIGURE 1 counts: &label - sequential sample sizes";
+    proc sql;
+        select count(*) as total_raw from &in.;
+        select count(*) as adults_18plus from &in. where RIDAGEYR >= 18;
+        select count(*) as hispanic_only from &in.
+            where RIDAGEYR >= 18 and RIDRETH3 in (1,2);
+        select count(*) as valid_weights from &in.
+            where RIDAGEYR >= 18 and RIDRETH3 in (1,2) and WTDRD1 > 0;
+        select count(*) as valid_calories from &in.
+            where RIDAGEYR >= 18 and RIDRETH3 in (1,2) and WTDRD1 > 0 and DR1TKCAL ne .;
+        select count(*) as final_sample from &in.
+            where RIDAGEYR >= 18 and RIDRETH3 in (1,2) and WTDRD1 > 0
+              and DR1TKCAL ne . and HEI2015_TOTAL_SCORE > 0;
+    quit;
+
+    title "FIGURE 1 counts: &label - number excluded at each step";
+    proc sql;
+        select
+            sum(RIDAGEYR < 18) as excluded_age,
+            sum(RIDRETH3 not in (1,2) and RIDAGEYR >= 18) as excluded_ethnicity,
+            sum(WTDRD1 <= 0 and RIDAGEYR >= 18 and RIDRETH3 in (1,2)) as excluded_weights,
+            sum(DR1TKCAL = . and RIDAGEYR >= 18 and RIDRETH3 in (1,2) and WTDRD1 > 0) as excluded_calories,
+            sum(HEI2015_TOTAL_SCORE = 0 and RIDAGEYR >= 18 and RIDRETH3 in (1,2)
+                and WTDRD1 > 0 and DR1TKCAL ne .) as excluded_hei
+        from &in.;
+    quit;
+    title;
+
+%mend consort_counts;
+
+%consort_counts(in=outdata.nhanes_1718, label=2017-18 development);
+%consort_counts(in=outdata.nhanes_1516, label=2015-16 validation);
+
+
+/*****************************************************************/
+/* TABLE 1: DEMOGRAPHIC TABLE (2017-2018 development sample)      */
+/*****************************************************************/
+
+title "TABLE 1: Demographics, NHANES 2017-2018 (weighted)";
+
+/* Point estimates for Table 1 continuous rows (no CI column shown) */
+proc surveymeans data=outdata.sabe_1718 mean stderr plots=none;
+    stratum SDMVSTRA; cluster SDMVPSU; weight WTDRD1;
+    var RIDAGEYR BMXBMI INDFMPIR HEI2015_TOTAL_SCORE DR1TKCAL;
+run;
+
+/* AHEI mean (restricted to participants with a valid AHEI score) */
+proc surveymeans data=outdata.sabe_1718 mean stderr plots=none;
+    where AHEI_TOTAL > 0;
+    stratum SDMVSTRA; cluster SDMVPSU; weight WTDRD1;
+    var AHEI_TOTAL;
+run;
+
+/* 95% CL columns shown only for Age, Income, and BMI in Table 1 */
+proc surveymeans data=outdata.sabe_1718 mean stderr clm plots=none;
+    stratum SDMVSTRA; cluster SDMVPSU; weight WTDRD1;
+    var RIDAGEYR INDFMPIR BMXBMI;
+run;
+
+/* Categorical rows: Sex, Hispanic subgroup, Education */
+proc surveyfreq data=outdata.sabe_1718;
+    stratum SDMVSTRA; cluster SDMVPSU; weight WTDRD1;
+    tables RIAGENDR RIDRETH3 DMDEDUC2;
+run;
+
+title;
+
+
+/*****************************************************************/
+/* FIGURE 2: SABE SIMPLE SCORE vs HEI-2020 SCATTERPLOT             */
+/* rho = 0.73, p < 0.0001 (2017-18); Table 2                      */
+/*                                                                 */
+/* NOTE: The published Figure 2 is rendered in R/ggplot2 (same     */
+/* workflow as the Figure 3/5 heatmaps), not SAS. This step just   */
+/* exports the plotting data - see figures_scatterplots.R for the  */
+/* actual figure code.                                             */
+/*****************************************************************/
+
+proc export data=outdata.sabe_1718(keep=score_sabe HEI2015_TOTAL_SCORE AHEI_TOTAL)
+    outfile="&outpath./scatter_data.csv"
+    dbms=csv replace;
+run;
+
+
+/*****************************************************************/
+/* FIGURE 3 (source data) & FIGURE 5 (source data):                */
+/* Correlation matrices exported for the R/ggplot2 heatmaps.       */
+/*                                                                 */
+/* IMPORTANT: this exports exactly the 16 items (score_sabe + 15   */
+/* named screener items) used by figures_heatmap_hei.R and         */
+/* figures_heatmap_ahei.R - NOT all 24 screener items. This        */
+/* matches the item_order list in those R scripts. One CSV per     */
+/* cycle per index (not split into continuous/yes-no files).       */
+/*****************************************************************/
+
+%macro export_heatmap_corr(in=, target=, filename=);
+
+    proc corr data=&in.
+        %if &target = AHEI %then %do; (where=(AHEI_TOTAL > 0)) %end;
+        spearman outp=_heatcorr_ noprint;
+        var score_sabe
+            screen_f_other screen_g_whole screen_PF_NUTSDS
+            screen_plant_prot screen_v_drkgr
+            yn_screen_olive_veg_oil yn_screen_full_fat
+            screen_seafood_3 screen_v_redor_combined
+            screen_f_juice screen_d_milk
+            yn_screen_butter_gravy
+            screen_ww_sweetbev_n screen_d_cheese screen_g_refined;
+        %if &target = HEI %then %do;
+            with HEI2015_TOTAL_SCORE HEI2015C9_FATTYACID HEI2015C8_SEAPLANT_PROT
+                 HEI2015C6_TOTALDAIRY HEI2015C7_TOTPROT HEI2015C5_WHOLEGRAIN
+                 HEI2015C4_WHOLEFRUIT HEI2015C3_TOTALFRUIT HEI2015C2_GREEN_AND_BEAN
+                 HEI2015C1_TOTALVEG HEI2015C13_ADDSUG HEI2015C12_SFAT
+                 HEI2015C11_REFINEDGRAIN HEI2015C10_SODIUM;
+        %end;
+        %else %do;
+            with AHEI_TOTAL ahei_veg ahei_fruit ahei_wholegrain ahei_ssb ahei_nuts
+                 ahei_meat ahei_omega3 ahei_pufa ahei_sodium ahei_alcohol;
+        %end;
+    run;
+
+    data _heat_tmp_(type=corr);
+        set _heatcorr_(type=corr);
+        where _TYPE_ = 'CORR';
+    run;
+
+    proc export data=_heat_tmp_
+        outfile="&outpath./&filename..csv"
+        dbms=csv replace;
+    run;
+
+%mend export_heatmap_corr;
+
+/* Figure 3 source data: HEI heatmap, one file per cycle */
+%export_heatmap_corr(in=outdata.sabe_1718, target=HEI,  filename=corr_hei_1718);
+%export_heatmap_corr(in=outdata.sabe_1516, target=HEI,  filename=corr_hei_1516);
+
+/* Figure 5 source data: AHEI heatmap, one file per cycle */
+%export_heatmap_corr(in=outdata.sabe_1718, target=AHEI, filename=corr_ahei_1718);
+%export_heatmap_corr(in=outdata.sabe_1516, target=AHEI, filename=corr_ahei_1516);
+
+
+/*****************************************************************/
+/* TABLE 2: SABE TOTAL SCORE vs HEI-2020 / AHEI-2010, BOTH CYCLES  */
+/* Simple algorithm and regression-weighted algorithm.            */
+/*****************************************************************/
+
+title "TABLE 2: 2017-18 development sample";
+proc corr data=outdata.sabe_1718 spearman plots=none;
+    var score_sabe score_sabe_reg;
+    with HEI2015_TOTAL_SCORE;
+run;
+proc corr data=outdata.sabe_1718 spearman plots=none;
+    where AHEI_TOTAL > 0;
+    var score_sabe score_sabe_reg;
+    with AHEI_TOTAL;
+run;
+
+title "TABLE 2: 2015-16 validation sample";
+proc corr data=outdata.sabe_1516 spearman plots=none;
+    var score_sabe score_sabe_reg;
+    with HEI2015_TOTAL_SCORE;
+run;
+proc corr data=outdata.sabe_1516 spearman plots=none;
+    where AHEI_TOTAL > 0;
+    var score_sabe score_sabe_reg;
+    with AHEI_TOTAL;
+run;
+title;
+
+
+/*****************************************************************/
+/* FIGURE 4: SABE SIMPLE SCORE vs AHEI-2010 SCATTERPLOT             */
+/* rho = 0.67, p < 0.0001 (2017-18); Table 2                       */
+/*                                                                  */
+/* NOTE: as with Figure 2, the published figure is rendered in      */
+/* R/ggplot2 - see figures_scatterplots.R. scatter_data.csv    */
+/* (exported above, under Figure 2) already contains AHEI_TOTAL,    */
+/* so no separate export is needed here.                            */
+/*****************************************************************/
+
+
+
+
+/*****************************************************************/
+/* SUPPLEMENTAL TABLE 1: HEI/AHEI COMPONENTS AS % OF MAXIMUM,      */
+/* BY HISPANIC SUBGROUP vs NON-HISPANIC (full NHANES 2017-18       */
+/* sample, not restricted to Hispanic/Latino adults)               */
+/*****************************************************************/
+
+data outdata.nhanes_all_adults;
+set outdata.nhanes_1718;
+
+    if RIDAGEYR < 18 then delete;
+    if WTDRD1 <= 0 then delete;
+    if DR1TKCAL = . then delete;
+    if HEI2015_TOTAL_SCORE = 0 then delete;
+
+    length ethnicity $25;
+    if RIDRETH3 = 1 then ethnicity = '1-Mexican American';
+    else if RIDRETH3 = 2 then ethnicity = '2-Other Hispanic';
+    else ethnicity = '3-Non-Hispanic';
+
+    /* HEI-2020 components as % of maximum (0-5 components x20; 0-10 components x10) */
+    pct_hei_total        = HEI2015_TOTAL_SCORE;
+    pct_hei_totalveg     = (HEI2015C1_TOTALVEG / 5) * 100;
+    pct_hei_greenbeans   = (HEI2015C2_GREEN_AND_BEAN / 5) * 100;
+    pct_hei_totalfruit   = (HEI2015C3_TOTALFRUIT / 5) * 100;
+    pct_hei_wholefruit   = (HEI2015C4_WHOLEFRUIT / 5) * 100;
+    pct_hei_wholegrain   = (HEI2015C5_WHOLEGRAIN / 10) * 100;
+    pct_hei_dairy        = (HEI2015C6_TOTALDAIRY / 10) * 100;
+    pct_hei_totprot      = (HEI2015C7_TOTPROT / 5) * 100;
+    pct_hei_seaplant     = (HEI2015C8_SEAPLANT_PROT / 5) * 100;
+    pct_hei_fattyacid    = (HEI2015C9_FATTYACID / 10) * 100;
+    pct_hei_sodium       = (HEI2015C10_SODIUM / 10) * 100;
+    pct_hei_refinedgrain = (HEI2015C11_REFINEDGRAIN / 10) * 100;
+    pct_hei_sfat         = (HEI2015C12_SFAT / 10) * 100;
+    pct_hei_addsug       = (HEI2015C13_ADDSUG / 10) * 100;
+
+    /* AHEI-2010 components, recomputed on the full sample */
+    ahei_veg_intake = V_TOTAL - V_STARCHY_TOTAL;
+    ahei_veg        = min(10, max(0, ((ahei_veg_intake/0.5)/5) * 10));
+    ahei_fruit      = min(10, max(0, ((F_OTHER/0.5)/4) * 10));
+    ahei_wg_grams   = G_WHOLE * 16;
+    if RIAGENDR = 2 then ahei_wholegrain = min(10, max(0, (ahei_wg_grams/75) * 10));
+    else                 ahei_wholegrain = min(10, max(0, (ahei_wg_grams/90) * 10));
+    ahei_ssb_intake  = F_JUICE + ww_sweetbev_n;
+    ahei_ssb         = min(10, max(0, (1 - ahei_ssb_intake) * 10));
+    ahei_nuts_intake = PF_NUTSDS + PF_LEGUMES;
+    ahei_nuts        = min(10, max(0, ahei_nuts_intake * 10));
+    ahei_meat_serv   = (PF_MEAT/4) + (PF_CUREDMEAT/1.5);
+    ahei_meat        = min(10, max(0, ((1.5 - ahei_meat_serv)/1.5) * 10));
+    if DR1TP205 ne . and DR1TP226 ne . then do;
+        ahei_omega3_mg = (DR1TP205 + DR1TP226) * 1000;
+        ahei_omega3    = min(10, max(0, (ahei_omega3_mg/250) * 10));
+    end; else ahei_omega3 = .;
+    if DR1TPFAT ne . and DR1TKCAL > 0 then do;
+        ahei_pufa_pct = ((DR1TPFAT - DR1TP205 - DR1TP226) * 9 / DR1TKCAL) * 100;
+        ahei_pufa     = min(10, max(0, ((ahei_pufa_pct - 2)/(10-2)) * 10));
+    end; else ahei_pufa = .;
+    ahei_sodium_raw = DR1TSODI;
+    if A_DRINKS = . then ahei_alcohol = .;
+    else if A_DRINKS = 0 then ahei_alcohol = 2.5;
+    else if RIAGENDR = 2 then do;
+        if 0.5 <= A_DRINKS <= 1.5 then ahei_alcohol = 10;
+        else if A_DRINKS < 0.5    then ahei_alcohol = max(0, (A_DRINKS/0.5) * 10);
+        else                           ahei_alcohol = max(0, ((2.5 - A_DRINKS)/(2.5-1.5)) * 10);
+    end; else do;
+        if 0.5 <= A_DRINKS <= 2.0 then ahei_alcohol = 10;
+        else if A_DRINKS < 0.5    then ahei_alcohol = max(0, (A_DRINKS/0.5) * 10);
+        else                           ahei_alcohol = max(0, ((3.5 - A_DRINKS)/(3.5-2.0)) * 10);
+    end;
+
+    if DR1TP205=. or DR1TP226=. or DR1TPFAT=. or DR1TSODI=. or A_DRINKS=.
+        then AHEI_TOTAL_noSodium = .;
+        else AHEI_TOTAL_noSodium = sum(ahei_veg, ahei_fruit, ahei_wholegrain, ahei_ssb,
+                                        ahei_nuts, ahei_meat, ahei_omega3, ahei_pufa,
+                                        ahei_alcohol);
+
+    pct_ahei_veg        = (ahei_veg / 10) * 100;
+    pct_ahei_fruit      = (ahei_fruit / 10) * 100;
+    pct_ahei_wholegrain = (ahei_wholegrain / 10) * 100;
+    pct_ahei_ssb        = (ahei_ssb / 10) * 100;
+    pct_ahei_nuts       = (ahei_nuts / 10) * 100;
+    pct_ahei_meat       = (ahei_meat / 10) * 100;
+    pct_ahei_omega3     = (ahei_omega3 / 10) * 100;
+    pct_ahei_pufa       = (ahei_pufa / 10) * 100;
+
+run;
+
+/* Sodium decile ranking + final AHEI total (needs the ranked sodium score) */
+proc rank data=outdata.nhanes_all_adults out=outdata.nhanes_all_adults groups=10;
+    var ahei_sodium_raw;
+    ranks sodium_decile;
+run;
+
+data outdata.nhanes_all_adults;
+set outdata.nhanes_all_adults;
+    ahei_sodium = (9 - sodium_decile) / 9 * 10;
+    if AHEI_TOTAL_noSodium ne . then AHEI_TOTAL = AHEI_TOTAL_noSodium + ahei_sodium;
+        else AHEI_TOTAL = .;
+    pct_ahei_total = AHEI_TOTAL;
+run;
+
+title "SUPPLEMENTAL TABLE 1: HEI-2020 components as % of maximum, by ethnicity";
+proc surveymeans data=outdata.nhanes_all_adults mean stderr plots=none;
+    stratum SDMVSTRA; cluster SDMVPSU; weight WTDRD1;
+    domain ethnicity;
+    var pct_hei_total pct_hei_totalveg pct_hei_greenbeans pct_hei_totalfruit
+        pct_hei_wholefruit pct_hei_wholegrain pct_hei_dairy pct_hei_totprot
+        pct_hei_seaplant pct_hei_fattyacid pct_hei_sodium pct_hei_refinedgrain
+        pct_hei_sfat pct_hei_addsug;
+run;
+
+title "SUPPLEMENTAL TABLE 1: AHEI-2010 components as % of maximum, by ethnicity";
+proc surveymeans data=outdata.nhanes_all_adults mean stderr plots=none;
+    where AHEI_TOTAL > 0;
+    stratum SDMVSTRA; cluster SDMVPSU; weight WTDRD1;
+    domain ethnicity;
+    var pct_ahei_total pct_ahei_veg pct_ahei_fruit pct_ahei_wholegrain pct_ahei_ssb
+        pct_ahei_nuts pct_ahei_meat pct_ahei_omega3 pct_ahei_pufa;
+run;
+title;
+
+
+/*****************************************************************/
+/* SUPPLEMENTAL TABLE 2: ITEM-LEVEL SCREENER x HEI-2020 CORRELATIONS*/
+/* Used to select the 12 items retained in the simple algorithm.  */
+/*****************************************************************/
+
+title "SUPPLEMENTAL TABLE 2: Continuous screener items vs HEI-2020 components (2017-18)";
+proc corr data=outdata.sabe_1718 spearman plots=none;
+    var screen_f_juice screen_f_other screen_v_drkgr screen_v_redor_combined
+        screen_g_whole screen_g_refined screen_d_milk
+        screen_d_yogurt screen_d_cheese screen_pf_eggs screen_pf_poult_3
+        screen_PF_NUTSDS screen_pf_meat_3 screen_pf_curedmeat_3 screen_seafood_3
+        screen_plant_prot screen_ww_sweetbev_n screen_desserts;
+    with HEI2015_TOTAL_SCORE HEI2015C1_TOTALVEG HEI2015C2_GREEN_AND_BEAN
+         HEI2015C3_TOTALFRUIT HEI2015C4_WHOLEFRUIT HEI2015C5_WHOLEGRAIN
+         HEI2015C6_TOTALDAIRY HEI2015C7_TOTPROT HEI2015C8_SEAPLANT_PROT
+         HEI2015C9_FATTYACID HEI2015C10_SODIUM HEI2015C11_REFINEDGRAIN
+         HEI2015C12_SFAT HEI2015C13_ADDSUG;
+run;
+
+title "SUPPLEMENTAL TABLE 2: Yes/no screener items vs HEI-2020 components (2017-18)";
+proc corr data=outdata.sabe_1718 spearman plots=none;
+    var yn_screen_sugar_honey yn_screen_artif_sweet yn_screen_cream
+        yn_screen_full_fat yn_screen_butter_gravy yn_screen_olive_veg_oil;
+    with HEI2015_TOTAL_SCORE HEI2015C1_TOTALVEG HEI2015C2_GREEN_AND_BEAN
+         HEI2015C3_TOTALFRUIT HEI2015C4_WHOLEFRUIT HEI2015C5_WHOLEGRAIN
+         HEI2015C6_TOTALDAIRY HEI2015C7_TOTPROT HEI2015C8_SEAPLANT_PROT
+         HEI2015C9_FATTYACID HEI2015C10_SODIUM HEI2015C11_REFINEDGRAIN
+         HEI2015C12_SFAT HEI2015C13_ADDSUG;
+run;
+title;
+
+/* Same as above, run on the validation cycle to confirm item selection is reproducible */
+title "SUPPLEMENTAL TABLE 2 (validation): Continuous screener items vs HEI-2020 components (2015-16)";
+proc corr data=outdata.sabe_1516 spearman plots=none;
+    var screen_f_juice screen_f_other screen_v_drkgr screen_v_redor_combined
+        screen_g_whole screen_g_refined screen_d_milk
+        screen_d_yogurt screen_d_cheese screen_pf_eggs screen_pf_poult_3
+        screen_PF_NUTSDS screen_pf_meat_3 screen_pf_curedmeat_3 screen_seafood_3
+        screen_plant_prot screen_ww_sweetbev_n screen_desserts;
+    with HEI2015_TOTAL_SCORE HEI2015C1_TOTALVEG HEI2015C2_GREEN_AND_BEAN
+         HEI2015C3_TOTALFRUIT HEI2015C4_WHOLEFRUIT HEI2015C5_WHOLEGRAIN
+         HEI2015C6_TOTALDAIRY HEI2015C7_TOTPROT HEI2015C8_SEAPLANT_PROT
+         HEI2015C9_FATTYACID HEI2015C10_SODIUM HEI2015C11_REFINEDGRAIN
+         HEI2015C12_SFAT HEI2015C13_ADDSUG;
+run;
+title;
+
+
+/*****************************************************************/
+/* SUPPLEMENTAL TABLES 3 & 4: FULL 24-ITEM REGRESSION MODELS       */
+/* 18 continuous + 6 yes/no items. These are the SAME models whose */
+/* coefficients are hardcoded into score_sabe_reg above (Table 3   */
+/* for HEI-2020, Table 4 for AHEI-2010) - re-run here for           */
+/* transparency/reproducibility. If you update the underlying data */
+/* and re-run this, copy the new HEI-2020 model's coefficients      */
+/* into score_sabe_reg in %prep_sabe_cycle above.                   */
+/*****************************************************************/
+
+title "SUPPLEMENTAL TABLE 3: Regression weights predicting HEI-2020 total (all 24 items) - basis for score_sabe_reg";
+proc reg data=outdata.sabe_1718;
+    model HEI2015_TOTAL_SCORE =
+        screen_f_juice screen_f_other screen_v_drkgr screen_v_redor_combined
+        screen_g_whole screen_g_refined screen_d_milk screen_d_yogurt
+        screen_d_cheese screen_pf_eggs screen_pf_poult_3 screen_PF_NUTSDS
+        screen_pf_meat_3 screen_pf_curedmeat_3 screen_seafood_3
+        screen_plant_prot screen_ww_sweetbev_n screen_desserts
+        yn_screen_sugar_honey yn_screen_artif_sweet yn_screen_cream
+        yn_screen_full_fat yn_screen_butter_gravy yn_screen_olive_veg_oil
+        / vif stb;
+run; quit;
+
+title "SUPPLEMENTAL TABLE 4: Regression weights predicting AHEI-2010 total (all 24 items)";
+proc reg data=outdata.sabe_1718;
+    where AHEI_TOTAL > 0;
+    model AHEI_TOTAL =
+        screen_f_juice screen_f_other screen_v_drkgr screen_v_redor_combined
+        screen_g_whole screen_g_refined screen_d_milk screen_d_yogurt
+        screen_d_cheese screen_pf_eggs screen_pf_poult_3 screen_PF_NUTSDS
+        screen_pf_meat_3 screen_pf_curedmeat_3 screen_seafood_3
+        screen_plant_prot screen_ww_sweetbev_n screen_desserts
+        yn_screen_sugar_honey yn_screen_artif_sweet yn_screen_cream
+        yn_screen_full_fat yn_screen_butter_gravy yn_screen_olive_veg_oil
+        / vif stb;
+run; quit;
+title;
+
+
+/*****************************************************************/
+/* SUPPLEMENTAL TABLE 5: SCREENER ITEMS vs AHEI-2010 COMPONENTS    */
+/*****************************************************************/
+
+title "SUPPLEMENTAL TABLE 5: Screener items vs AHEI-2010 components (2017-18)";
+proc corr data=outdata.sabe_1718 spearman plots=none;
+    where AHEI_TOTAL > 0;
+    var screen_f_juice screen_f_other screen_v_drkgr screen_v_redor_combined
+        screen_g_whole screen_g_refined screen_d_milk
+        screen_d_yogurt screen_d_cheese screen_pf_eggs screen_pf_poult_3
+        screen_PF_NUTSDS screen_pf_meat_3 screen_pf_curedmeat_3 screen_seafood_3
+        screen_plant_prot screen_ww_sweetbev_n screen_desserts
+        yn_screen_olive_veg_oil yn_screen_full_fat yn_screen_butter_gravy
+        yn_screen_sugar_honey yn_screen_artif_sweet yn_screen_cream;
+    with AHEI_TOTAL ahei_veg ahei_fruit ahei_wholegrain ahei_ssb ahei_nuts
+         ahei_meat ahei_omega3 ahei_pufa ahei_sodium ahei_alcohol;
+run;
+title;
+
+
+/*****************************************************************/
+/* END OF ANALYSIS                                                */
+/*****************************************************************/
