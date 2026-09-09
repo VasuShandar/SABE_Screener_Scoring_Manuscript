@@ -62,7 +62,7 @@ Each input CSV (`NHANES_1718_export.csv`, `NHANES_1516_export.csv`) is expected 
 | Figure 4 (SABE vs AHEI-2010 scatter) | Same `scatter_data.csv` (AHEI_TOTAL column); rendered by `figures_all.R` |
 | Figure 5 (SABE items vs AHEI-2010 heatmap) | SAS exports `corr_ahei_1718.csv` / `corr_ahei_1516.csv` (Figure 5 source data section); rendered by `figures_all.R` |
 | Supplemental Table 1 (% of max score by ethnicity) | `SUPPLEMENTAL TABLE 1` |
-| Supplemental Table 2 (item selection, |ρ| ≥ 0.3 threshold) | `SUPPLEMENTAL TABLE 2` |
+| Supplemental Table 2 (item selection| `SUPPLEMENTAL TABLE 2` |
 | Supplemental Table 3 (regression weights, HEI-2020) | `SUPPLEMENTAL TABLE 3` — also the model whose coefficients are hardcoded into `score_sabe_reg` |
 | Supplemental Table 4 (regression weights, AHEI-2010) | `SUPPLEMENTAL TABLE 4` |
 | Supplemental Table 5 (SABE items vs AHEI-2010 components) | `SUPPLEMENTAL TABLE 5` |
